@@ -1,17 +1,19 @@
+# This is NOT a Dockerfile. This is LIKE a Dockerfile.
+# Run these commands in the container through bash/shell
+# i.e. `gontainer --chrt /fs run ash` and you'll have a working
+# Python installation
+
 # /etc/resolv.conf for internet access
-nameserver 8.8.8.8
-
-# Install python/pip
-ENV PYTHONUNBUFFERED=1
-RUN apk add --update --no-cache python3 && ln -sf python3 /usr/bin/python
-RUN python3 -m ensurepip
-RUN pip3 install --no-cache --upgrade pip setuptools
-
-# Install build tools
+echo nameserver 8.8.8.8 > /etc/resolv.conf
+env PYTHONUNBUFFERED=1
+# Install barebones Python
+apk add --update --no-cache python3 && ln -sf python3 /usr/bin/python
+# Install pip
+python3 -m ensurepip
+pip3 install --no-cache --upgrade pip setuptools
+# Install GNU compiler collection so python can compile+build numpy and other packages
 apk add --update alpine-sdk
-
-# Install python compiler thingy
 apk add python3-dev
-
-# Pip install package
+# Install packages
 ARCHFLAGS=-Wno-error=unused-command-line-argument-hard-error-in-future pip install --upgrade numpy
+ARCHFLAGS=-Wno-error=unused-command-line-argument-hard-error-in-future pip install --upgrade pandas
