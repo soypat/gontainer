@@ -14,17 +14,22 @@ var ( // flags
 	loud          bool
 )
 
+var cntcmd *exec.Cmd
+
 var args []string
 
 // Flag and argument parsing
 func init() {
-	pflag.StringVarP(&chroot, "chrt", "", "", "Where to chroot to. Should contain a linux filesystem. Alpine is recommended.")
-	pflag.StringVarP(&chdir, "chdr", "", "/usr", "Initial chdir executed when running container.")
+	pflag.StringVarP(&chroot, "chrt", "", "", "Where to chroot to. Should contain a linux filesystem. Alpine is recommended. GONTAINER_FS environment is default if not set")
+	pflag.StringVarP(&chdir, "chdr", "", "/usr", "Initial chdir executed when running container")
 	pflag.BoolVar(&loud, "loud", false, "Suppresses not container output. Debugging purposes")
 	pflag.Parse()
 	args = pflag.Args()
 	if chroot == "" {
-		fatalf("chroot (--chrt flag) is required. got args: %v", args)
+		chroot = os.Getenv("GONTAINER_FS")
+		if chroot == "" {
+			fatalf("chroot (--chrt flag) is required. got args: %v", args)
+		}
 	}
 	if len(args) < 2 {
 		fatalf("too few arguments. got: %v", args)
@@ -36,6 +41,9 @@ func main() {
 	case "run":
 		run()
 	case "child":
+		defer func() {
+			cntcmd.Process.Kill()
+		}()
 		child()
 	default:
 		panic("bad command")
@@ -69,14 +77,15 @@ func child() {
 	must(syscall.Chdir("/"), "error in 'chdir /'")
 	must(syscall.Mount("proc", "proc", "proc", 0, ""), "error in proc mount")
 	must(syscall.Chdir(chdir), "error in 'chdir ", chdir+"'")
-	cmd := exec.Command(args[1], args[2:]...)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	cntcmd = exec.Command(args[1], args[2:]...)
+	cntcmd.Stdin = os.Stdin
+	cntcmd.Stdout = os.Stdout
+	cntcmd.Stderr = os.Stderr
 	defer func() {
-		cmd.Process.Kill()
+		cntcmd.Process.Kill()
+		syscall.Unmount("/proc", 0)
 	}()
-	must(cmd.Run(), fmt.Sprintf("run %v return error", args[1:]))
+	must(cntcmd.Run(), fmt.Sprintf("run %v return error", args[1:]))
 	syscall.Unmount("/proc", 0)
 }
 
