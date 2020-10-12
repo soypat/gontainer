@@ -7,7 +7,6 @@ import (
 	"os/signal"
 	"sync"
 	"syscall"
-	"time"
 
 	"github.com/spf13/pflag"
 )
@@ -42,27 +41,36 @@ func init() {
 }
 
 func main() {
+	// outline cleanup tasks
+	wg.Add(1)
+
+	c := make(chan os.Signal, 1)
+	shutDownChan = make(chan os.Signal, 1)
+	signal.Notify(c, os.Interrupt)
+
+	// actual program
 	switch args[0] {
 	case "run":
-		run()
+		go run()
 	case "child":
-		wg.Add(1)
 		go child()
-		c := make(chan os.Signal, 1)
-		shutDownChan = make(chan os.Signal, 1)
-		signal.Notify(c, os.Interrupt)
-		select {
-		case <-c:
-		case <-shutDownChan:
-		}
-		wg.Wait()
 	default:
 		panic("bad command")
 	}
 
+	// wait for program end by interrupt
+	select {
+	case <-c:
+		cleanup() // system interrupt -> cleanup immediately
+	case <-shutDownChan:
+	}
+
+	// wait for cleanup before ending
+	wg.Wait()
 }
 
 func run() {
+	defer cleanup()
 	infof("run as [%d] : running %v", os.Getpid(), args[1:])
 	lst := append([]string{"--chrt", chroot, "--chdr", chdir, "child"}, args[1:]...)
 	runcmd = exec.Command("/proc/self/exe", lst...)
@@ -101,9 +109,11 @@ func child() {
 func cleanup() {
 	if cntcmd != nil {
 		cntcmd.Process.Signal(os.Interrupt)
-		time.Sleep(time.Millisecond * 1)
-		cntcmd.Process.Signal(os.Kill)
 		syscall.Unmount("/proc", 0)
+	}
+	if runcmd != nil {
+
+		runcmd.Process.Signal(os.Interrupt)
 	}
 	shutDownChan <- os.Interrupt
 	wg.Done()
