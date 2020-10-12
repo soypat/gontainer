@@ -2,10 +2,11 @@ package main
 
 import (
 	"fmt"
-	"github.com/spf13/pflag"
 	"os"
 	"os/exec"
 	"syscall"
+
+	"github.com/spf13/pflag"
 )
 
 var ( // flags
@@ -67,14 +68,15 @@ func child() {
 	// initial chdir is necessary so dir pointer is in chroot dir when proc mount is called
 	must(syscall.Chdir("/"), "error in 'chdir /'")
 	must(syscall.Mount("proc", "proc", "proc", 0, ""), "error in proc mount")
-	must(syscall.Chdir(chdir), "error in 'chdir ", chdir +"'")
+	must(syscall.Chdir(chdir), "error in 'chdir ", chdir+"'")
 	cmd := exec.Command(args[1], args[2:]...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-
-	must(cmd.Run(),fmt.Sprintf("run %v return error",args[1:]))
-
+	defer func() {
+		cmd.Process.Kill()
+	}()
+	must(cmd.Run(), fmt.Sprintf("run %v return error", args[1:]))
 	syscall.Unmount("/proc", 0)
 }
 
@@ -89,8 +91,8 @@ func must(err error, s ...string) {
 func infof(format string, args ...interface{}) { logf("inf", format, args) }
 
 //func printf(format string, args ...interface{}) { logf("prn", format, args) }
-func errorf(format string, args ...interface{}) {logf("err", format, args) }
-func fatalf(format string, args ...interface{}) { loud=true; logf("fat", format, args); os.Exit(1) }
+func errorf(format string, args ...interface{}) { logf("err", format, args) }
+func fatalf(format string, args ...interface{}) { loud = true; logf("fat", format, args); os.Exit(1) }
 func logf(tag, format string, args []interface{}) {
 	if loud {
 		msg := fmt.Sprintf(format, args...)
