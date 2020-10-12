@@ -20,7 +20,7 @@ var ( // flags
 // cleanup tasks
 var cntcmd, runcmd *exec.Cmd
 var wg = &sync.WaitGroup{}
-
+var shutDownChan chan os.Signal
 var args []string
 
 // Flag and argument parsing
@@ -48,13 +48,18 @@ func main() {
 	case "child":
 		wg.Add(1)
 		go child()
+		c := make(chan os.Signal, 1)
+		shutDownChan = make(chan os.Signal, 1)
+		signal.Notify(c, os.Interrupt)
+		select {
+		case <-c:
+		case <-shutDownChan:
+		}
+		wg.Wait()
 	default:
 		panic("bad command")
 	}
-	c := make(chan os.Signal, 1)
-	signal.Notify(c, os.Interrupt)
-	<-c
-	wg.Wait()
+
 }
 
 func run() {
@@ -74,7 +79,6 @@ func run() {
 // This child function runs a command in a containerized
 // linux filesystem so it can't hurt you.
 func child() {
-	defer wg.Done()
 	defer cleanup()
 	infof("child as [%d]: chrt: %s,  chdir:%s", os.Getpid(), chroot, chdir)
 	infof("running %v", args[1:])
@@ -101,6 +105,8 @@ func cleanup() {
 		cntcmd.Process.Signal(os.Kill)
 		syscall.Unmount("/proc", 0)
 	}
+	shutDownChan <- os.Interrupt
+	wg.Done()
 }
 
 func must(err error, s ...string) {
