@@ -4,7 +4,10 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
+	"sync"
 	"syscall"
+	"time"
 
 	"github.com/spf13/pflag"
 )
@@ -14,7 +17,9 @@ var ( // flags
 	loud          bool
 )
 
-var cntcmd *exec.Cmd
+// cleanup tasks
+var cntcmd, runcmd *exec.Cmd
+var wg = &sync.WaitGroup{}
 
 var args []string
 
@@ -41,32 +46,36 @@ func main() {
 	case "run":
 		run()
 	case "child":
-		defer func() {
-			cntcmd.Process.Kill()
-		}()
-		child()
+		wg.Add(1)
+		go child()
 	default:
 		panic("bad command")
 	}
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, os.Interrupt)
+	<-c
+	wg.Wait()
 }
 
 func run() {
 	infof("run as [%d] : running %v", os.Getpid(), args[1:])
 	lst := append([]string{"--chrt", chroot, "--chdr", chdir, "child"}, args[1:]...)
-	cmd := exec.Command("/proc/self/exe", lst...)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	cmd.SysProcAttr = &syscall.SysProcAttr{
+	runcmd = exec.Command("/proc/self/exe", lst...)
+	runcmd.Stdin = os.Stdin
+	runcmd.Stdout = os.Stdout
+	runcmd.Stderr = os.Stderr
+	runcmd.SysProcAttr = &syscall.SysProcAttr{
 		Cloneflags:   syscall.CLONE_NEWUTS | syscall.CLONE_NEWPID | syscall.CLONE_NEWNS,
 		Unshareflags: syscall.CLONE_NEWNS,
 	}
-	cmd.Run()
+	runcmd.Run()
 }
 
 // This child function runs a command in a containerized
 // linux filesystem so it can't hurt you.
 func child() {
+	defer wg.Done()
+	defer cleanup()
 	infof("child as [%d]: chrt: %s,  chdir:%s", os.Getpid(), chroot, chdir)
 	infof("running %v", args[1:])
 	must(syscall.Sethostname([]byte("container")))
@@ -81,12 +90,17 @@ func child() {
 	cntcmd.Stdin = os.Stdin
 	cntcmd.Stdout = os.Stdout
 	cntcmd.Stderr = os.Stderr
-	defer func() {
-		cntcmd.Process.Kill()
-		syscall.Unmount("/proc", 0)
-	}()
 	must(cntcmd.Run(), fmt.Sprintf("run %v return error", args[1:]))
 	syscall.Unmount("/proc", 0)
+}
+
+func cleanup() {
+	if cntcmd != nil {
+		cntcmd.Process.Signal(os.Interrupt)
+		time.Sleep(time.Millisecond * 1)
+		cntcmd.Process.Signal(os.Kill)
+		syscall.Unmount("/proc", 0)
+	}
 }
 
 func must(err error, s ...string) {
