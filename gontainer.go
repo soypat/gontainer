@@ -44,9 +44,10 @@ func init() {
 		fatalf("too few arguments. got: %v", args)
 	}
 	pflag.VisitAll(func(f *pflag.Flag) {
-		if f.Value.Type() == "bool" {
+		if f.Value.Type() == "bool" && f.Value.String() == "true" {
 			flagInputs = append(flagInputs, "--"+f.Name)
-		} else {
+		}
+		if f.Value.Type() != "bool" {
 			flagInputs = append(flagInputs, "--"+f.Name, f.Value.String())
 		}
 	})
@@ -161,9 +162,7 @@ func killAfterSecond(c *exec.Cmd) {
 
 func must(err error, s ...string) {
 	if err != nil {
-		loud = true
-		errorf("%s : %v", err, s)
-		os.Exit(1)
+		fatalf("%s : %v", err, s)
 	}
 }
 
