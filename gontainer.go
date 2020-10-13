@@ -7,6 +7,7 @@ import (
 	"os/signal"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/spf13/pflag"
 )
@@ -110,13 +111,22 @@ func cleanup() {
 	if cntcmd != nil {
 		cntcmd.Process.Signal(os.Interrupt)
 		syscall.Unmount("/proc", 0)
+		go killAfterSecond(cntcmd)
+		cntcmd.Wait()
 	}
 	if runcmd != nil {
-
 		runcmd.Process.Signal(os.Interrupt)
+		go killAfterSecond(runcmd)
+		runcmd.Wait()
 	}
+
 	shutDownChan <- os.Interrupt
 	wg.Done()
+}
+
+func killAfterSecond(c *exec.Cmd) {
+	time.Sleep(time.Second)
+	c.Process.Kill()
 }
 
 func must(err error, s ...string) {

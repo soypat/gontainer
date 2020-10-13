@@ -1,3 +1,6 @@
 gontainer
 **.tar.xz
-
+*.ext3
+*.ext4
+*.fat
+*.vfat
