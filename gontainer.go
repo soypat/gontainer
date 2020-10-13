@@ -89,7 +89,7 @@ func run() {
 	lst := append(append(flagInputs, "child"), args[1:]...)
 	infof("running proc/self/exe %v", lst)
 	if timeout > 0 {
-		ctx, cancel := context.WithTimeout(context.Background(), timeout+time.Millisecond*20)
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
 		runcmd = exec.CommandContext(ctx, "/proc/self/exe", lst...)
 	} else {
@@ -120,7 +120,7 @@ func child() {
 	must(syscall.Mount("proc", "proc", "proc", 0, ""), "error in proc mount")
 	must(syscall.Chdir(chdir), "error in 'chdir ", chdir+"'")
 	if timeout > 0 {
-		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		ctx, cancel := context.WithTimeout(context.Background(), timeout+time.Millisecond*50)
 		defer cancel()
 		cntcmd = exec.CommandContext(ctx, args[1], args[2:]...)
 	} else {
