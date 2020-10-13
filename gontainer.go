@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -13,6 +14,7 @@ import (
 )
 
 var ( // flags
+	timeout       time.Duration
 	chroot, chdir string
 	loud          bool
 )
@@ -22,11 +24,13 @@ var cntcmd, runcmd *exec.Cmd
 var wg = &sync.WaitGroup{}
 var shutDownChan chan os.Signal
 var args []string
+var flagInputs []string
 
 // Flag and argument parsing
 func init() {
-	pflag.StringVarP(&chroot, "chrt", "", "", "Where to chroot to. Should contain a linux filesystem. Alpine is recommended. GONTAINER_FS environment is default if not set")
-	pflag.StringVarP(&chdir, "chdr", "", "/usr", "Initial chdir executed when running container")
+	pflag.StringVar(&chroot, "chrt", "", "Where to chroot to. Should contain a linux filesystem. Alpine is recommended. GONTAINER_FS environment is default if not set")
+	pflag.StringVar(&chdir, "chdr", "/usr", "Initial chdir executed when running container")
+	pflag.DurationVar(&timeout, "timeout", 0, "Timeout before ending program. If 0 then never ends")
 	pflag.BoolVar(&loud, "loud", false, "Suppresses not container output. Debugging purposes")
 	pflag.Parse()
 	args = pflag.Args()
@@ -39,6 +43,14 @@ func init() {
 	if len(args) < 2 {
 		fatalf("too few arguments. got: %v", args)
 	}
+	pflag.VisitAll(func(f *pflag.Flag) {
+		if f.Value.Type() == "bool" {
+			flagInputs = append(flagInputs, "--"+f.Name)
+		} else {
+			flagInputs = append(flagInputs, "--"+f.Name, f.Value.String())
+		}
+	})
+	infof("flaginputs: %v", flagInputs)
 }
 
 func main() {
@@ -73,8 +85,16 @@ func main() {
 func run() {
 	defer cleanup()
 	infof("run as [%d] : running %v", os.Getpid(), args[1:])
-	lst := append([]string{"--chrt", chroot, "--chdr", chdir, "child"}, args[1:]...)
-	runcmd = exec.Command("/proc/self/exe", lst...)
+
+	lst := append(append(flagInputs, "child"), args[1:]...)
+	infof("running proc/self/exe %v", lst)
+	if timeout > 0 {
+		ctx, cancel := context.WithTimeout(context.Background(), timeout+time.Millisecond*20)
+		defer cancel()
+		runcmd = exec.CommandContext(ctx, "/proc/self/exe", lst...)
+	} else {
+		runcmd = exec.Command("/proc/self/exe", lst...)
+	}
 	runcmd.Stdin = os.Stdin
 	runcmd.Stdout = os.Stdout
 	runcmd.Stderr = os.Stderr
@@ -99,10 +119,18 @@ func child() {
 	must(syscall.Chdir("/"), "error in 'chdir /'")
 	must(syscall.Mount("proc", "proc", "proc", 0, ""), "error in proc mount")
 	must(syscall.Chdir(chdir), "error in 'chdir ", chdir+"'")
-	cntcmd = exec.Command(args[1], args[2:]...)
+	if timeout > 0 {
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		cntcmd = exec.CommandContext(ctx, args[1], args[2:]...)
+	} else {
+		cntcmd = exec.Command(args[1], args[2:]...)
+	}
+
 	cntcmd.Stdin = os.Stdin
 	cntcmd.Stdout = os.Stdout
 	cntcmd.Stderr = os.Stderr
+
 	must(cntcmd.Run(), fmt.Sprintf("run %v return error", args[1:]))
 	syscall.Unmount("/proc", 0)
 }
@@ -112,11 +140,13 @@ func cleanup() {
 		cntcmd.Process.Signal(os.Interrupt)
 		syscall.Unmount("/proc", 0)
 		go killAfterSecond(cntcmd)
+		// cntcmd.Stdin, cntcmd.Stdout, cntcmd.Stderr = nil, nil, nil
 		cntcmd.Wait()
 	}
 	if runcmd != nil {
 		runcmd.Process.Signal(os.Interrupt)
 		go killAfterSecond(runcmd)
+		// runcmd.Stdin, runcmd.Stdout, runcmd.Stderr = nil, nil, nil
 		runcmd.Wait()
 	}
 
