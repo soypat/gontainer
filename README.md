@@ -9,11 +9,6 @@ to a linux environment. You can get one from [Alpine Linux](https://alpinelinux.
 
 **Usage:**
 
-How to open a shell window (Alpine linux fs)
-```shell script
-gontainer --chrt "/home/alpine-fs" run sh 
-```
-
 How to open a ash window, which is like bash (Alpine linux fs)
 ```shell script
 gontainer --chrt "/home/alpine-fs" run ash 
@@ -24,36 +19,42 @@ Example on how to run python (must be installed beforehand, see [Gockerfile](Goc
 gontainer --chrt "/home/alpine-fs" run python3 
 ```
 
-**VFS mount usage:**
+## Quickstart
 
-There is a file included with this repo called `mnt-vfs.sh` which
-is a script that creates a size-limited filesystem and mounts it.
+Requirements:
+* Gontainer binary
+* [`mnt-vfs.sh`](./mnt-vfs.sh) shell script
+* Linux filesystem image (alpine available at [Alpine Linux](https://alpinelinux.org/downloads/))
+* Root privilidges for all commands
 
-Usage:
-```shell script
-chmod +x ./mnt-vfs.sh
-./mnt-vfs.sh my-fs-name 100 # Will create a 100MB vfs with the name `my-fs-name`
-```
+1. Create a blank virtual file system and mount using the `mnt-vfs.sh` script.
+    ```sh
+    cd /dev/external-hard-drive
+    sudo mnt-vfs.sh VFS 200
+    ```
+    This command will create a directory for the VFS at `/mnt/VFS` and create a 
+    blank image for the filesystem of type `ext3` in the working directory called `VFS.ext3`.
+    The size of the image will be 200MB, trying to store more than that on the filesystem will be impossible. Finally it mounts the newly created `VFS.ext3` filesystem image to `/mnt/VFS` so
+    that the filesystem is ready to use. It also adds an mounting line to `/etc/fstab` file so that
+    when mounting the filesystem correct parameters are used.
 
-### Creating a quota limited virtual filesystem
-For this example we will create a 2GB image mounted at `/mnt/my-vfs`. I assume you have a alpine
-linux filesystem at `/alpine-fs` and are running everything as root.
+2. Copy linux filesystem image to newly created VFS. For this example the filesystem
+is located at `$HOME/alpine-fs`.
+    ```sh
+    sudo cp -r $HOME/alpine-fs/* /mnt/VFS/
+    ```
+    Check if copy was succesfull:
+    ```sh
+    # ls /mnt/upsya-vfs
+    alpine-fs  bin  dev  etc  home  lib  lost+found  media  mnt  opt  proc  root  run  sbin  srv  sys  tmp  usr  var
+    ```
+3. You may now use gontainer on the image. Open a shell with `ash`
+    ```sh
+    sudo gontainer --chrt /mnt/my-vfs run sh
+    ```
+    Look at the [`Gockerfile`](./Gockerfile) for typical first commands on getting a
+    python installation up and running.
 
-```shell script
-wget http://urlTo.thefile/mnt-vfs.sh
-chmod +x ./mnt-vfs.sh
-./mnt-vfs.sh my-vfs 2000
-cp -r /alpine-fs /mnt/my-vfs
-```
-
-Now you have a virtual filesystem ready with a 2GB limit! You can
-run `gontainer` on it!
-
-```shell script
-gontainer --chrt /mnt/my-vfs run sh
-```
-
-
-
-
-
+To **uninstall** virtual filesystem delete the line in your `/etc/fstab` folder corresponding
+to the virtual filesystem (only one line with second value set to mount directory).
+Finally delete the mount directory.

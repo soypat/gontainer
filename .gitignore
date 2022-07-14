@@ -4,3 +4,5 @@ gontainer
 *.ext4
 *.fat
 *.vfat
+
+alpine-fs
