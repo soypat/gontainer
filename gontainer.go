@@ -49,13 +49,23 @@ func main() {
 	} else {
 		ctx, cancel = context.WithTimeout(context.Background(), cfg.timeout)
 	}
+	cleanup := func() {
+		// Not sure how to fix console breaking on 1s timeout. Following is not working.
+		// os.Stdin = os.NewFile(uintptr(syscall.Stdin), "/dev/stdin")
+		// os.Stdout = os.NewFile(uintptr(syscall.Stdout), "/dev/stdout")
+		// os.Stderr = os.NewFile(uintptr(syscall.Stderr), "/dev/stderr")
+		cancel()
+	}
+	defer cleanup()
 	// Ctrl+C interrupt channel
 	intChan := make(chan os.Signal, 1)
 	signal.Notify(intChan, os.Interrupt)
 	go func() {
 		<-intChan
 		cancel()
-		time.Sleep(15 * time.Millisecond) // wait a tad bit for process to finish if possible
+		// Exit program forcefully on second Interrupt receive.
+		<-intChan
+		cleanup()
 		cfg.fatalf("forced program exit")
 	}()
 	var err error
@@ -67,6 +77,7 @@ func main() {
 	default:
 		cfg.fatalf("unknown argument " + args[0])
 	}
+	cleanup()
 	if err != nil {
 		cfg.fatalf(err.Error())
 	}
