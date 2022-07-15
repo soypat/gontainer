@@ -1,182 +1,131 @@
+//go:build !legacy
+
 package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"os"
 	"os/exec"
 	"os/signal"
-	"sync"
 	"syscall"
 	"time"
-
-	"github.com/spf13/pflag"
 )
 
-var ( // flags
-	timeout       time.Duration
-	chroot, chdir string
-	loud          bool
-)
-
-// cleanup tasks
-var cntcmd, runcmd *exec.Cmd
-var wg = &sync.WaitGroup{}
-var shutDownChan chan os.Signal
-var args []string
-var flagInputs []string
-
-// Flag and argument parsing
-func init() {
-	pflag.StringVar(&chroot, "chrt", "", "Where to chroot to. Should contain a linux filesystem. Alpine is recommended. GONTAINER_FS environment is default if not set")
-	pflag.StringVar(&chdir, "chdr", "/usr", "Initial chdir executed when running container")
-	pflag.DurationVar(&timeout, "timeout", 0, "Timeout before ending program. If 0 then never ends")
-	pflag.BoolVar(&loud, "loud", false, "Suppresses not container output. Debugging purposes")
-	pflag.Parse()
-	args = pflag.Args()
-	if chroot == "" {
-		chroot = os.Getenv("GONTAINER_FS")
-		if chroot == "" {
-			fatalf("chroot (--chrt flag) is required. got args: %v", args)
-		}
-	}
-	if len(args) < 2 {
-		fatalf("too few arguments. got: %v", args)
-	}
-	pflag.VisitAll(func(f *pflag.Flag) {
-		if f.Value.Type() == "bool" && f.Value.String() == "true" {
-			flagInputs = append(flagInputs, "--"+f.Name)
-		}
-		if f.Value.Type() != "bool" {
-			flagInputs = append(flagInputs, "--"+f.Name, f.Value.String())
-		}
-	})
-	infof("flaginputs: %v", flagInputs)
+type configuration struct {
+	timeout     time.Duration
+	chroot      string
+	chdir       string
+	verbose     int
+	childInputs []string
 }
 
 func main() {
-	// outline cleanup tasks
-	wg.Add(1)
-
-	c := make(chan os.Signal, 1)
-	shutDownChan = make(chan os.Signal, 1)
-	signal.Notify(c, os.Interrupt)
-
-	// actual program
+	var cfg configuration
+	flag.StringVar(&cfg.chroot, "chrt", os.Getenv("GONTAINER_FS"), "Where to chroot to. Should contain a linux filesystem. Alpine is recommended. GONTAINER_FS environment is default if not set")
+	flag.StringVar(&cfg.chdir, "chdir", "/usr", "Initial chdir executed when running container")
+	flag.DurationVar(&cfg.timeout, "timeout", 0, "Timeout before ending program. If 0 then never ends")
+	flag.IntVar(&cfg.verbose, "v", 0, "If v is set container command output not suppressed. Debugging purposes")
+	flag.Parse()
+	args := flag.Args()
+	if len(args) < 2 {
+		flag.Usage()
+		cfg.fatalf("need 2 arguments. got: %v", args)
+	}
+	if cfg.chroot == "" {
+		flag.Usage()
+		cfg.fatalf("chroot flag is required (--chrt flag). got flags/args: %v", os.Args)
+	}
+	if args[0] != "child" {
+		flag.VisitAll(func(f *flag.Flag) {
+			cfg.childInputs = append(cfg.childInputs, "-"+f.Name, f.Value.String())
+		})
+	}
+	var ctx context.Context
+	var cancel func()
+	if cfg.timeout == 0 {
+		ctx, cancel = context.WithCancel(context.Background())
+	} else {
+		ctx, cancel = context.WithTimeout(context.Background(), cfg.timeout)
+	}
+	// Ctrl+C interrupt channel
+	intChan := make(chan os.Signal, 1)
+	signal.Notify(intChan, os.Interrupt)
+	go func() {
+		<-intChan
+		cancel()
+		time.Sleep(15 * time.Millisecond) // wait a tad bit for process to finish if possible
+		cfg.fatalf("forced program exit")
+	}()
+	var err error
 	switch args[0] {
 	case "run":
-		go run()
+		err = run(ctx, args, cfg)
 	case "child":
-		go child()
+		err = child(ctx, args, cfg)
 	default:
-		panic("bad command")
+		cfg.fatalf("unknown argument " + args[0])
 	}
-
-	// wait for program end by interrupt
-	select {
-	case <-c:
-		cleanup() // system interrupt -> cleanup immediately
-	case <-shutDownChan:
+	if err != nil {
+		cfg.fatalf(err.Error())
 	}
-
-	// wait for cleanup before ending
-	wg.Wait()
+	cfg.infof("%s finished", args[0])
 }
 
-func run() {
-	defer cleanup()
-	infof("run as [%d] : running %v", os.Getpid(), args[1:])
+func run(ctx context.Context, args []string, cfg configuration) error {
+	cfg.infof("run as [%d] : running %v", os.Getpid(), args[1:])
+	lst := append(append(cfg.childInputs, "child"), args[1:]...)
 
-	lst := append(append(flagInputs, "child"), args[1:]...)
-	infof("running proc/self/exe %v", lst)
-	if timeout > 0 {
-		ctx, cancel := context.WithTimeout(context.Background(), timeout)
-		defer cancel()
-		runcmd = exec.CommandContext(ctx, "/proc/self/exe", lst...)
-	} else {
-		runcmd = exec.Command("/proc/self/exe", lst...)
-	}
-	runcmd.Stdin = os.Stdin
-	runcmd.Stdout = os.Stdout
-	runcmd.Stderr = os.Stderr
-	runcmd.SysProcAttr = &syscall.SysProcAttr{
+	cmd := exec.CommandContext(ctx, "/proc/self/exe", lst...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.SysProcAttr = &syscall.SysProcAttr{
 		Cloneflags:   syscall.CLONE_NEWUTS | syscall.CLONE_NEWPID | syscall.CLONE_NEWNS,
 		Unshareflags: syscall.CLONE_NEWNS,
 	}
-	runcmd.Run()
+	return cmd.Run()
 }
 
-// This child function runs a command in a containerized
-// linux filesystem so it can't hurt you.
-func child() {
-	defer cleanup()
-	infof("child as [%d]: chrt: %s,  chdir:%s", os.Getpid(), chroot, chdir)
-	infof("running %v", args[1:])
-	must(syscall.Sethostname([]byte("container")))
-	must(syscall.Chroot(chroot), "error in 'chroot ", chroot+"'")
-	syscall.Mkdir(chdir, 0600)
+func child(ctx context.Context, args []string, cfg configuration) error {
+	cfg.infof("child as [%d]: chrt: %s,  chdir:%s, args: ", os.Getpid(), cfg.chroot, cfg.chdir, args[1:])
+
+	cfg.must(syscall.Sethostname([]byte("container")), "setting hostname")
+	cfg.must(syscall.Chroot(cfg.chroot), "during chroot")
+	syscall.Mkdir(cfg.chdir, 0600)
 
 	// initial chdir is necessary so dir pointer is in chroot dir when proc mount is called
-	must(syscall.Chdir("/"), "error in 'chdir /'")
-	must(syscall.Mount("proc", "proc", "proc", 0, ""), "error in proc mount")
-	must(syscall.Chdir(chdir), "error in 'chdir ", chdir+"'")
-	if timeout > 0 {
-		ctx, cancel := context.WithTimeout(context.Background(), timeout+time.Millisecond*50)
-		defer cancel()
-		cntcmd = exec.CommandContext(ctx, args[1], args[2:]...)
-	} else {
-		cntcmd = exec.Command(args[1], args[2:]...)
-	}
+	cfg.must(syscall.Chdir("/"), "during chdir before proc mount")
+	cfg.must(syscall.Mount("proc", "proc", "proc", 0, ""), "error in proc mount")
+	cfg.must(syscall.Chdir(cfg.chdir), "during chdir")
 
-	cntcmd.Stdin = os.Stdin
-	cntcmd.Stdout = os.Stdout
-	cntcmd.Stderr = os.Stderr
-
-	must(cntcmd.Run(), fmt.Sprintf("run %v return error", args[1:]))
-	syscall.Unmount("/proc", 0)
+	cmd := exec.CommandContext(ctx, args[1], args[2:]...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	defer syscall.Unmount("/proc", 0)
+	return cmd.Run()
 }
 
-func cleanup() {
-	if cntcmd != nil {
-		cntcmd.Process.Signal(os.Interrupt)
-		syscall.Unmount("/proc", 0)
-		go killAfterSecond(cntcmd)
-		// cntcmd.Stdin, cntcmd.Stdout, cntcmd.Stderr = nil, nil, nil
-		cntcmd.Wait()
-	}
-	if runcmd != nil {
-		runcmd.Process.Signal(os.Interrupt)
-		go killAfterSecond(runcmd)
-		// runcmd.Stdin, runcmd.Stdout, runcmd.Stderr = nil, nil, nil
-		runcmd.Wait()
-	}
-
-	shutDownChan <- os.Interrupt
-	wg.Done()
+func (cfg *configuration) infof(format string, args ...interface{})  { cfg.logf("inf", format, args) }
+func (cfg *configuration) errorf(format string, args ...interface{}) { cfg.logf("err", format, args) }
+func (cfg *configuration) fatalf(format string, args ...interface{}) {
+	cfg.verbose = 1
+	cfg.logf("fat", format, args)
+	os.Exit(1)
 }
-
-func killAfterSecond(c *exec.Cmd) {
-	time.Sleep(time.Second)
-	c.Process.Kill()
-}
-
-func must(err error, s ...string) {
-	if err != nil {
-		fatalf("%s : %v", err, s)
-	}
-}
-
-func infof(format string, args ...interface{}) { logf("inf", format, args) }
-
-//func printf(format string, args ...interface{}) { logf("prn", format, args) }
-func errorf(format string, args ...interface{}) { logf("err", format, args) }
-func fatalf(format string, args ...interface{}) { loud = true; logf("fat", format, args); os.Exit(1) }
-func logf(tag, format string, args []interface{}) {
-	if loud {
+func (cfg *configuration) logf(tag, format string, args []interface{}) {
+	if cfg.verbose != 0 {
 		msg := fmt.Sprintf(format, args...)
 		if args == nil {
 			msg = fmt.Sprintf(format)
 		}
 		fmt.Println(fmt.Sprintf("[%s] %s", tag, msg))
+	}
+}
+func (cfg *configuration) must(err error, msg string) {
+	if err != nil {
+		cfg.fatalf(msg + ": " + err.Error())
 	}
 }
