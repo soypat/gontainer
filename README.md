@@ -11,12 +11,12 @@ to a linux environment. You can get one from [Alpine Linux](https://alpinelinux.
 
 How to open a ash window, which is like bash (Alpine linux fs)
 ```shell script
-gontainer --chrt "/home/alpine-fs" run ash 
+gontainer -chrt "/home/alpine-fs" run ash 
 ```
 
 Example on how to run python (must be installed beforehand, see [Gockerfile](Gockerfile))
 ```shell script
-gontainer --chrt "/home/alpine-fs" run python3 
+gontainer -chrt "/home/alpine-fs" run python3 
 ```
 
 ## Quickstart
@@ -50,7 +50,7 @@ is located at `$HOME/alpine-fs`.
     ```
 3. You may now use gontainer on the image. Open a shell with `ash`
     ```sh
-    sudo gontainer --chrt /mnt/my-vfs run sh
+    sudo gontainer -chrt /mnt/my-vfs run sh
     ```
     Look at the [`Gockerfile`](./Gockerfile) for typical first commands on getting a
     python installation up and running.
