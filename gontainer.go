@@ -78,8 +78,11 @@ func main() {
 		cfg.fatalf("unknown argument " + args[0])
 	}
 	cleanup()
+	if errno, ok := err.(*exec.ExitError); ok {
+		os.Exit(errno.ExitCode())
+	}
 	if err != nil {
-		cfg.fatalf(err.Error())
+		cfg.fatalf("%[1]T %[1]v", err)
 	}
 	cfg.infof("%s finished", args[0])
 }
